@@ -1,0 +1,35 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: cymbal-air
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        run.googleapis.com/container-dependencies: '{"app":["toolbox"]}'
+    spec:
+      serviceAccountName: 314706382749-compute@developer.gserviceaccount.com
+      containers:
+        - name: app
+          image: us-central1-docker.pkg.dev/gemini-enterprise-496008/cloud-run-source-deploy/cymbal-air-app
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TOOLBOX_URL
+              value: "http://127.0.0.1:5000"
+            - name: MIDDLEWARE_SECRET
+              value: "b0ecda6a221f776620ba3c51be84ebf6061ca705ba5dd56aae2a253212b35dd9"
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "gemini-enterprise-496008"
+            - name: GOOGLE_CLOUD_LOCATION
+              value: "us-central1"
+        - name: toolbox
+          image: us-central1-docker.pkg.dev/gemini-enterprise-496008/cloud-run-source-deploy/toolbox-cymbal-air
+          startupProbe:
+            tcpSocket:
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6

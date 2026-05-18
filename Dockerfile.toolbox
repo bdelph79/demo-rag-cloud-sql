@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+ARG VERSION=0.21.0
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    curl -fsSL -o /usr/local/bin/toolbox \
+      "https://storage.googleapis.com/genai-toolbox/v${VERSION}/linux/amd64/toolbox" && \
+    chmod +x /usr/local/bin/toolbox && \
+    apt-get remove -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+COPY tools.yaml /app/tools.yaml
+WORKDIR /app
+CMD ["toolbox", "--tools-file=/app/tools.yaml", "--address=0.0.0.0", "--port=5000"]

@@ -266,7 +266,27 @@ def initialize_data(
             if values:
                 execute_sql(f"""INSERT INTO policies VALUES {", ".join(values)}""")
             print("Policies table initialized")
-            
+
+            # Initialize Tickets
+            execute_sql("DROP TABLE IF EXISTS tickets CASCADE")
+            execute_sql(
+                """
+                CREATE TABLE tickets(
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id VARCHAR(255),
+                    user_name VARCHAR(255),
+                    user_email VARCHAR(255),
+                    airline VARCHAR(8),
+                    flight_number VARCHAR(8),
+                    departure_airport VARCHAR(8),
+                    departure_time DATETIME,
+                    arrival_airport VARCHAR(8),
+                    arrival_time DATETIME
+                )
+            """
+            )
+            print("Tickets table initialized")
+
             conn.commit()
 
 

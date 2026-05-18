@@ -17,3 +17,5 @@ pandas-stubs==2.2.2.240807
 pandas==2.2.3
 pydantic==2.9.0
 toolbox-langchain==0.5.2
+pymysql>=1.1.1
+cloud-sql-python-connector>=1.10.0

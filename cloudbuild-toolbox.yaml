@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -f
+      - Dockerfile.toolbox
+      - -t
+      - us-central1-docker.pkg.dev/gemini-enterprise-496008/cloud-run-source-deploy/toolbox-cymbal-air
+      - .
+images:
+  - us-central1-docker.pkg.dev/gemini-enterprise-496008/cloud-run-source-deploy/toolbox-cymbal-air

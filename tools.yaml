@@ -1,12 +1,12 @@
 sources:
   my-pg-instance:
     kind: cloud-sql-mysql
-    project: dataweb-480410
+    project: gemini-enterprise-496008
     region: us-central1
-    instance: my-cloudsql-instance
+    instance: cymbal-air-mysql
     database: assistantdemo
     user: root
-    password: 68ce8da457f7ef288d77f8af
+    password: 4c481c997979b4ce36177a7a
 
 tools:
   search_airports:

@@ -22,10 +22,14 @@ TOOLBOX_URL = os.getenv("TOOLBOX_URL", default="http://127.0.0.1:5000")
 
 # Tools for agent
 async def initialize_tools():
-    auth_token_provider = auth_methods.aget_google_id_token(TOOLBOX_URL, clock_skew_in_seconds=60)
-    client = ToolboxClient(
-        TOOLBOX_URL, client_headers={"Authorization": auth_token_provider}
-    )
+    is_local = TOOLBOX_URL.startswith(("http://127.0.0.1", "http://localhost"))
+    if is_local:
+        client = ToolboxClient(TOOLBOX_URL)
+    else:
+        auth_token_provider = auth_methods.aget_google_id_token(TOOLBOX_URL, clock_skew_in_seconds=60)
+        client = ToolboxClient(
+            TOOLBOX_URL, client_headers={"Authorization": auth_token_provider}
+        )
     tools = await client.aload_toolset("cymbal_air")
 
     # Load insert_ticket and validate_ticket tools separately to implement
