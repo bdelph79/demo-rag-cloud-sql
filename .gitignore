@@ -1,0 +1,31 @@
+# project configuration
+config.yml
+
+# vscode
+.vscode
+
+# direnv
+.envrc
+
+# pyenv
+.python-version
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+
+# Local secrets
+.env
+
+# Large binaries and datasets
+toolbox
+data/*.csv
