@@ -42,18 +42,16 @@ Sidecar: toolbox (port 5000, unchanged)
 **A2A call flow:**
 ```
 Gemini Enterprise
-  │  POST /  {"jsonrpc":"2.0","method":"message/send","params":{…}}
+  │  POST /  {"jsonrpc":"2.0","method":"message/stream","params":{…}}
   ▼
 CymbalAirA2AExecutor.execute()
-  │  await agent.user_session_invoke(task_id, user_text)
+  │  await for event in agent.user_session_stream(task_id, user_text):
+  │    event_queue.enqueue_event(map_to_a2a_event(event))
   ▼
 LangGraph ReAct graph (MemorySaver, thread_id=task_id)
   │  tool calls via MCP Toolbox
   ▼
 Cloud SQL (airports / amenities / flights / policies)
-  │
-  ▼ response text
-event_queue.enqueue_event(new_agent_text_message(result))
 ```
 
 ---
@@ -64,17 +62,20 @@ event_queue.enqueue_event(new_agent_text_message(result))
 
 ```
 a2a-sdk==1.0.3
+sse-starlette==2.1.0
 ```
 
 ### 2. `agent/a2a_executor.py` — new file
 
 ```python
-from typing import Any
+from typing import Any, AsyncGenerator
 import uuid
+import json
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.utils import new_agent_text_message
+from a2a.utils import new_agent_text_message, new_task_status_update
+from a2a.types import TaskStatus
 
 from agent.agent import Agent
 
@@ -86,15 +87,12 @@ class CymbalAirA2AExecutor(AgentExecutor):
         self._agent = agent
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        # Use A2A task_id as the LangGraph thread_id for per-conversation memory.
-        # Fall back to a fresh UUID if no task ID is available yet.
         thread_id: str = context.task_id or str(uuid.uuid4())
 
-        # Ensure the agent session exists (loads tools, builds graph on first call).
+        # Ensure the agent session exists.
         fake_session: dict[str, Any] = {"uuid": thread_id, "history": [], "user_info": None}
         await self._agent.user_session_create(fake_session)
 
-        # Extract the user's text from the A2A message parts.
         user_text = context.get_user_input()
         if not user_text:
             await event_queue.enqueue_event(
@@ -102,25 +100,58 @@ class CymbalAirA2AExecutor(AgentExecutor):
             )
             return
 
-        # Invoke the LangGraph agent.
-        response = await self._agent.user_session_invoke(thread_id, user_text)
-        output: str = response.get("output", "")
-
-        # If the graph paused for a booking confirmation, surface it as text.
-        # Full human-in-the-loop via A2A `input_required` state is a follow-up (see §Caveats).
-        if response.get("confirmation"):
-            conf = response["confirmation"]
-            params = conf.get("params", {})
-            output = (
-                f"{output}\n\n"
-                f"**Booking confirmation required.**\n"
-                f"Flight: {params.get('airline','')} {params.get('flight_number','')}, "
-                f"{params.get('departure_airport','')} → {params.get('arrival_airport','')}, "
-                f"departing {params.get('departure_time','')}.\n"
-                f"Reply 'confirm' to book or 'cancel' to abort."
-            )
-
-        await event_queue.enqueue_event(new_agent_text_message(output))
+        # Use streaming to support Gemini Enterprise "Thoughts" UI.
+        async for event in self._agent.user_session_stream(thread_id, user_text):
+            # Map LangGraph events to A2A events with 'adk_thoughts' metadata.
+            # This is critical for rendering in Gemini Enterprise.
+            if event["type"] == "node_start" and event["node"] == "tools":
+                await event_queue.enqueue_event(
+                    new_task_status_update(
+                        status=TaskStatus.RUNNING,
+                        message="Consulting database...",
+                        metadata={
+                            "adk_thoughts": [
+                                {
+                                    "thought": "I need to check the database for relevant information.",
+                                    "state": "thinking"
+                                }
+                            ]
+                        }
+                    )
+                )
+            elif event["type"] == "tool_start":
+                await event_queue.enqueue_event(
+                    new_task_status_update(
+                        status=TaskStatus.RUNNING,
+                        message=f"Running tool: {event['tool']}",
+                        metadata={
+                            "adk_thoughts": [
+                                {
+                                    "thought": f"Calling tool {event['tool']} with arguments {event['inputs']}",
+                                    "state": "thinking"
+                                }
+                            ]
+                        }
+                    )
+                )
+            elif event["type"] == "tool_end":
+                await event_queue.enqueue_event(
+                    new_task_status_update(
+                        status=TaskStatus.RUNNING,
+                        message=f"Tool {event['tool']} finished.",
+                        metadata={
+                            "adk_thoughts": [
+                                {
+                                    "thought": f"Tool {event['tool']} returned result.",
+                                    "state": "thinking"
+                                }
+                            ]
+                        }
+                    )
+                )
+            elif event["type"] == "final_answer":
+                output: str = event["output"]
+                await event_queue.enqueue_event(new_agent_text_message(output))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         raise NotImplementedError("cancel not supported")
@@ -186,7 +217,7 @@ def _mount_a2a(app: FastAPI, agent: Agent, base_url: str) -> None:
         version="1.0.0",
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
-        capabilities=AgentCapabilities(streaming=False),
+        capabilities=AgentCapabilities(streaming=True),
         skills=skills,
     )
 
@@ -243,7 +274,7 @@ In the `app` container's `env` list, add:
   "version": "1.0.0",
   "defaultInputModes": ["text/plain"],
   "defaultOutputModes": ["text/plain"],
-  "capabilities": { "streaming": false },
+  "capabilities": { "streaming": true },
   "skills": [
     {"id": "airport_search",  "name": "Airport Search",     "tags": ["airports"]},
     {"id": "flight_search",   "name": "Flight Search",      "tags": ["flights"]},
@@ -281,11 +312,10 @@ This is a follow-up implementation; the current spec surfaces the confirmation a
 - Use Firestore or Cloud SQL as the task store by implementing `a2a.server.tasks.TaskStore`.
 - Or pin the Cloud Run service to min-instances=1 if state loss is acceptable.
 
-### 4. Streaming
-The Agent Card advertises `streaming: false`. Streaming requires switching from
-`message/send` to `message/stream` (SSE) and using `EventQueue` in a background task while
-returning a streaming response. This is straightforward to add with `a2a-sdk` once the non-streaming
-path is validated.
+### 4. Streaming and ADK Thoughts (Gemini Enterprise)
+To fully integrate with Gemini Enterprise, especially regarding the UI rendering of the agent's thought process, the agent must support streaming (Server-Sent Events) and correctly emit metadata (like `adk_thoughts`).
+*   **Streaming Capability:** The Agent Card advertises `streaming: true`. The implementation uses `a2a.server.events.EventQueue` to push updates as they happen.
+*   **Metadata Handling:** Gemini Enterprise consumes specific metadata payloads to render thoughts. The executor intercepts LangGraph stream events and packages them into `TaskStatusUpdateEvent` payloads with the `adk_thoughts` metadata format. This ensures thoughts appear in the interactive "Thoughts" section of the Gemini Enterprise UI rather than as raw text.
 
 ---
 
@@ -305,7 +335,7 @@ curl -s -X POST "$URL/" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "message/send",
+    "method": "message/stream",
     "params": {
       "message": {
         "role": "user",
@@ -313,7 +343,7 @@ curl -s -X POST "$URL/" \
         "messageId": "msg-001"
       }
     }
-  }' | python3 -m json.tool
+  }'
 
-# Expected: response with "result.status.state": "completed" and artifact text from Gemini
+# Expected: SSE stream with status updates (thoughts) and final message parts.
 ```

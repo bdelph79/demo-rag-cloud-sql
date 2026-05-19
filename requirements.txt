@@ -19,3 +19,5 @@ pydantic==2.9.0
 toolbox-langchain==0.5.2
 pymysql>=1.1.1
 cloud-sql-python-connector>=1.10.0
+a2a-sdk==1.0.3
+sse-starlette==2.1.0

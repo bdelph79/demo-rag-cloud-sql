@@ -27,7 +27,13 @@ from google.oauth2 import id_token  # type:ignore
 from markdown import markdown
 from starlette.middleware.sessions import SessionMiddleware
 
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCard, AgentCapabilities, AgentSkill
+
 from agent import Agent
+from agent.a2a_executor import CymbalAirA2AExecutor
 
 routes = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -254,6 +260,65 @@ def clear_user_info(session: dict[str, Any]):
     del session["user_info"]
 
 
+def _mount_a2a(app: FastAPI, agent: Agent, base_url: str) -> None:
+    """Register A2A discovery and task endpoints on the existing FastAPI app."""
+    skills = [
+        AgentSkill(
+            id="airport_search",
+            name="Airport Search",
+            description="Search airports by name, city, or country.",
+            tags=["airports"],
+            examples=["Find airports in Japan", "What is the IATA code for Heathrow?"],
+        ),
+        AgentSkill(
+            id="flight_search",
+            name="Flight Search",
+            description="List available flights by route and date, or look up a flight by number.",
+            tags=["flights"],
+            examples=["Flights from SFO to JFK tomorrow", "What gate is CY 0456 departing from?"],
+        ),
+        AgentSkill(
+            id="amenity_search",
+            name="SFO Amenity Search",
+            description="Find airport amenities at SFO (shops, restaurants, lounges) near a gate.",
+            tags=["amenities", "sfo"],
+            examples=["Coffee near gate A6", "Luxury shops in Terminal 2"],
+        ),
+        AgentSkill(
+            id="policy_search",
+            name="Cymbal Air Policy",
+            description="Answer questions about Cymbal Air passenger policies.",
+            tags=["policy", "baggage", "check-in"],
+            examples=["What is the baggage allowance?", "Can I change my ticket?"],
+        ),
+    ]
+
+    agent_card = AgentCard(
+        name="Cymbal Air Assistant",
+        description=(
+            "Cymbal Air customer service assistant — answers flight, amenity, "
+            "and policy questions, and supports flight booking."
+        ),
+        url=base_url,
+        version="1.0.0",
+        default_input_modes=["text/plain"],
+        default_output_modes=["text/plain"],
+        capabilities=AgentCapabilities(streaming=True),
+        skills=skills,
+    )
+
+    handler = DefaultRequestHandler(
+        agent_executor=CymbalAirA2AExecutor(agent),
+        task_store=InMemoryTaskStore(),
+    )
+
+    a2a_app = A2AStarletteApplication(
+        agent_card=agent_card,
+        http_handler=handler,
+    )
+    a2a_app.add_routes_to_app(app)
+
+
 def init_app(
     client_id: Optional[str],
     middleware_secret: Optional[str],
@@ -265,6 +330,14 @@ def init_app(
     app.include_router(routes)
     app.mount("/static", StaticFiles(directory="static"), name="static")
     app.add_middleware(SessionMiddleware, secret_key=middleware_secret)
+
+    # A2A Integration
+    service_url = os.getenv("SERVICE_URL")
+    if service_url:
+        _base_url = service_url if service_url.endswith("/") else service_url + "/"
+        _mount_a2a(app, app.state.agent, _base_url)
+        print(f"A2A routes mounted at {service_url}")
+
     return app
 
 

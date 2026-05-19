@@ -16,7 +16,7 @@ import asyncio
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from langchain.globals import set_verbose  # type: ignore
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -137,6 +137,48 @@ class Agent:
             return response
         response["state"] = final_state
         return response
+
+    async def user_session_stream(
+        self, uuid: str, user_prompt: Optional[str]
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        config = self.get_config(uuid)
+        if user_prompt:
+            user_query = [HumanMessage(content=user_prompt)]
+            app_input = {"messages": user_query}
+        else:
+            app_input = None
+
+        # langgraph 0.2+ supports astream_events
+        async for event in self._langgraph_app.astream_events(
+            app_input, config=config, version="v2"
+        ):
+            kind = event["event"]
+            if kind == "on_chat_model_stream":
+                pass
+            elif kind == "on_tool_start":
+                yield {
+                    "type": "tool_start",
+                    "tool": event["name"],
+                    "inputs": event["data"].get("input"),
+                }
+            elif kind == "on_tool_end":
+                yield {
+                    "type": "tool_end",
+                    "tool": event["name"],
+                    "output": event["data"].get("output"),
+                }
+            elif kind == "on_chain_start" and event["name"] == "tools":
+                yield {
+                    "type": "node_start",
+                    "node": "tools",
+                }
+            elif kind == "on_chain_end" and event["name"] == "LangGraph":
+                # Final state contains all messages.
+                messages = event["data"]["output"]["messages"]
+                yield {
+                    "type": "final_answer",
+                    "output": messages[-1].content,
+                }
 
     def retrieve_trace(self, messages: Sequence[BaseMessage]):
         trace = []
